@@ -1,17 +1,4 @@
-FROM debian:jessie
-
-RUN apt-get update \
-	&& apt-get install -y --no-install-recommends \
-		bzip2 \
-		ca-certificates \
-		curl \
-		libffi-dev \
-		libgdbm3 \
-		libssl-dev \
-		libyaml-dev \
-		procps \
-		zlib1g-dev \
-	&& rm -rf /var/lib/apt/lists/*
+FROM alpine:3.4
 
 # skip installing gem documentation
 RUN mkdir -p /usr/local/etc \
@@ -20,43 +7,70 @@ RUN mkdir -p /usr/local/etc \
 		echo 'update: --no-document'; \
 	} >> /usr/local/etc/gemrc
 
-ENV RUBY_MAJOR 2.2
-ENV RUBY_VERSION 2.2.5
-ENV RUBY_DOWNLOAD_SHA256 30c4b31697a4ca4ea0c8db8ad30cf45e6690a0f09687e5d483c933c03ca335e3
+ENV RUBY_MAJOR 2.1
+ENV RUBY_VERSION 2.1.10
+ENV RUBY_DOWNLOAD_SHA256 fb2e454d7a5e5a39eb54db0ec666f53eeb6edc593d1d2b970ae4d150b831dd20
 ENV RUBYGEMS_VERSION 2.6.6
 
 # some of ruby's build scripts are written in ruby
 # we purge this later to make sure our final image uses what we just built
 RUN set -ex \
-	&& buildDeps=' \
+	&& apk add --no-cache --virtual .ruby-builddeps \
 		autoconf \
 		bison \
+		bzip2 \
+		bzip2-dev \
+		ca-certificates \
+		coreutils \
+		curl \
 		gcc \
-		libbz2-dev \
-		libgdbm-dev \
-		libglib2.0-dev \
-		libncurses-dev \
-		libreadline-dev \
+		gdbm-dev \
+		glib-dev \
+		libc-dev \
+		libffi-dev \
 		libxml2-dev \
 		libxslt-dev \
+		linux-headers \
 		make \
+		ncurses-dev \
+		openssl-dev \
+		procps \
+# https://bugs.ruby-lang.org/issues/11869 and https://github.com/docker-library/ruby/issues/75
+		readline-dev \
 		ruby \
-	' \
-	&& apt-get update \
-	&& apt-get install -y --no-install-recommends $buildDeps \
-	&& rm -rf /var/lib/apt/lists/* \
+		yaml-dev \
+		zlib-dev \
 	&& curl -fSL -o ruby.tar.gz "http://cache.ruby-lang.org/pub/ruby/$RUBY_MAJOR/ruby-$RUBY_VERSION.tar.gz" \
 	&& echo "$RUBY_DOWNLOAD_SHA256 *ruby.tar.gz" | sha256sum -c - \
-	&& mkdir -p /usr/src/ruby \
-	&& tar -xzf ruby.tar.gz -C /usr/src/ruby --strip-components=1 \
+	&& mkdir -p /usr/src \
+	&& tar -xzf ruby.tar.gz -C /usr/src \
+	&& mv "/usr/src/ruby-$RUBY_VERSION" /usr/src/ruby \
 	&& rm ruby.tar.gz \
 	&& cd /usr/src/ruby \
 	&& { echo '#define ENABLE_PATH_CHECK 0'; echo; cat file.c; } > file.c.new && mv file.c.new file.c \
 	&& autoconf \
-	&& ./configure --disable-install-doc \
-	&& make -j"$(nproc)" \
+	# the configure script does not detect isnan/isinf as macros
+	&& ac_cv_func_isnan=yes ac_cv_func_isinf=yes \
+		./configure --disable-install-doc \
+	&& make -j"$(getconf _NPROCESSORS_ONLN)" \
 	&& make install \
-	&& apt-get purge -y --auto-remove $buildDeps \
+	&& runDeps="$( \
+		scanelf --needed --nobanner --recursive /usr/local \
+			| awk '{ gsub(/,/, "\nso:", $2); print "so:" $2 }' \
+			| sort -u \
+			| xargs -r apk info --installed \
+			| sort -u \
+	)" \
+	&& apk add --virtual .ruby-rundeps $runDeps \
+		bzip2 \
+		ca-certificates \
+		curl \
+		libffi-dev \
+		openssl-dev \
+		yaml-dev \
+		procps \
+		zlib-dev \
+	&& apk del .ruby-builddeps \
 	&& gem update --system $RUBYGEMS_VERSION \
 	&& rm -r /usr/src/ruby
 
